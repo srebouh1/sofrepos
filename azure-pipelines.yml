@@ -1,0 +1,48 @@
+trigger:
+- main
+
+variables:
+  python_version: 3.11.3
+  poetry_version: 1.4.2
+  organization_name: BETM
+  project_name: Ace
+  feed_name: ftr_pypi
+
+pool:
+  vmImage: windows-latest
+
+steps:
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: $(python_version)
+    addToPath: true
+  displayName: Install Python $(python_version)
+
+- task: PowerShell@2
+  inputs:
+    targetType: inline
+    script: |
+      New-Item -ItemType Directory -Path "$env:USERPROFILE\python_poetry" | Out-Null
+      $env:POETRY_HOME = "$env:USERPROFILE\python_poetry"
+      $env:POETRY_VERSION = "1.4.2"
+      (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
+      Write-Host "##vso[task.prependpath]${env:POETRY_HOME}\bin"
+  displayName: Install Poetry $(poetry_version)
+
+- script: |
+    poetry install
+  displayName: Install dependencies
+
+- script: |
+    poetry run python -m unittest discover .\tests\unit_test\
+  displayName: Run tests
+
+- script: |
+    poetry build
+  displayName: Build the package distribution
+
+- script: |
+    poetry config repositories.azure https://pkgs.dev.azure.com/BETM/Ace/_packaging/simple_private_feed/pypi/upload
+    poetry config http-basic.azure $(username) $(password)
+    poetry publish -r azure
+  displayName: Publish the package distribution (new release)

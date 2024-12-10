@@ -1,0 +1,1 @@
+gwmi Win32_Product -filter "name like 'Adobe Acrobat Reader' " | % { $_.Uninstall() }

@@ -1,0 +1,1 @@
+Winget update -e --silent --accept-source-agreements --accept-package-agreements --id DominikReichl.KeePass
