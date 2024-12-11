@@ -1,0 +1,275 @@
+name: AppService_Deployment
+trigger:
+ branches:
+    include:
+     - dev 
+     - main 
+
+parameters:
+  - name: enviroment
+    displayName: enviroment
+    type: string 
+    default: 'Dev_Deploy'
+    values:
+      - 'Dev_Deploy'
+      - 'Prod_Deploy'
+      - 'Stage_Deploy'
+
+variables:
+
+  - name: Dev_RG
+    value: aze1-Prtflioprtl-dev
+  - name: Stage_RG
+    value: aze1-Prtflioprtl-stg
+  - name: Prod_RG
+    value: aze1-Prtflioprtl-prd
+  - name: Dev_ServiceConnection
+    value: 'Dev Service Connection'
+  - name: Stage_ServiceConnection
+    value: 'Stage Service Connection'
+  - name: Prod_ServiceConnection
+    value: 'Prod Service Connection'
+  - name: deploymentDefaultLocation
+    value: eastus
+  
+
+pool:
+  vmImage: 'ubuntu-latest'
+stages:
+
+  - stage: Build
+    jobs:
+    - job: Build
+      steps:
+
+   
+      - task: CopyFiles@2
+        displayName: 'Include templates in the artifact'
+        inputs:
+           SourceFolder: 'app_services_deployment'
+           Contents: '**'
+             
+           TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publish artifact'
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+          ArtifactName: 'drop'
+          publishLocation: 'Container'
+############################################Validate######################################################################
+  - stage: Validate
+    jobs:
+    - job: ValidateBicepCode
+      displayName: Validate Bicep code
+      steps:
+        - task: AzureResourceManagerTemplateDeployment@3
+          name: RunPreflightValidation
+          displayName: Run preflight validation
+          inputs:
+            connectedServiceName: $(Dev_ServiceConnection)
+            location: $(deploymentDefaultLocation)
+            deploymentMode: Validation
+            resourceGroupName:  $(Dev_RG)
+            csmFile: ./app_services_deployment/main.bicep
+            csmParametersFile: ./app_services_deployment/app_services_paramaters_dev.json
+############################################# DEV#############################################################################
+  - stage: Dev_Preview
+    jobs:
+    - job: PreviewAzureChanges
+      displayName: Preview Azure changes
+      steps:
+
+        - task: DownloadBuildArtifacts@0
+          displayName: 'Download artifact'
+          inputs:
+            buildType: 'current'
+            downloadType: 'single'
+            artifactName: 'drop'
+            downloadPath: '$(System.ArtifactsDirectory)'
+        - task: AzureCLI@2
+          name: RunWhatIf
+          displayName: Run what-if
+          inputs:
+            azureSubscription: $(Dev_ServiceConnection)
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az deployment group what-if \
+                --resource-group $(Dev_RG) \
+                --template-file $(System.ArtifactsDirectory)/drop/main.bicep \
+                --parameters @$(System.ArtifactsDirectory)/drop/app_services_paramaters_dev.json
+
+  - stage: Dev_Deploy
+    dependsOn: Dev_Preview
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/dev'))
+    jobs:
+      - deployment: Deploy_app_service_To_dev
+        environment: app_service
+        strategy:
+         runOnce:
+            deploy:
+             steps:
+              
+              - task: DownloadBuildArtifacts@0
+                displayName: 'Download artifact'
+                inputs:
+                  buildType: 'current'
+                  downloadType: 'single'
+                  artifactName: 'drop'
+                  downloadPath: '$(System.ArtifactsDirectory)'
+
+              - task: AzureCLI@2
+
+                displayName: 'deploy app srvices to Dev'
+                inputs:
+                  azureSubscription: $(Dev_ServiceConnection)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                              # Creating a resource group
+                                  az group create \
+                                --name $(Dev_RG) \
+                                --location $(deploymentDefaultLocation)
+                                
+                                  #Deploying Bicep file
+                                  az deployment group create \
+                                --name $(Build.BuildNumber) \
+                                --resource-group  $(Dev_RG) \
+                                --template-file $(System.ArtifactsDirectory)/drop/main.bicep \
+                                --parameters @$(System.ArtifactsDirectory)/drop/app_services_paramaters_dev.json
+##########################################################stage########################################################################
+  - stage: Stage_Preview
+    dependsOn: Dev_Preview
+    jobs:
+    - job: PreviewAzureChanges
+      displayName: Preview Azure changes
+      steps:
+
+        - task: DownloadBuildArtifacts@0
+          displayName: 'Download artifact'
+          inputs:
+            buildType: 'current'
+            downloadType: 'single'
+            artifactName: 'drop'
+            downloadPath: '$(System.ArtifactsDirectory)'
+        - task: AzureCLI@2
+          name: RunWhatIf
+          displayName: Run what-if
+          inputs:
+            azureSubscription: $(Stage_ServiceConnection)
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az deployment group what-if \
+                --resource-group $(Stage_RG) \
+                --template-file $(System.ArtifactsDirectory)/drop/main.bicep \
+                --parameters @$(System.ArtifactsDirectory)/drop/app_services_paramaters_stg.json
+
+  - stage: Stage_Deploy
+    dependsOn: Stage_Preview
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+    
+      - deployment: Deploy_app_service_To_stage
+        environment: app_service
+        strategy:
+         runOnce:
+            deploy:
+             steps:
+              
+              - task: DownloadBuildArtifacts@0
+                displayName: 'Download artifact'
+                inputs:
+                  buildType: 'current'
+                  downloadType: 'single'
+                  artifactName: 'drop'
+                  downloadPath: '$(System.ArtifactsDirectory)'
+     
+              - task: AzureCLI@2
+
+                displayName: 'deploy app services to Stage'
+                inputs:
+                  azureSubscription: $(Stage_ServiceConnection)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                              # Creating a resource group
+                                  az group create \
+                                --name $(Stage_RG)\
+                                --location $(deploymentDefaultLocation)
+                                
+                                  #Deploying Bicep file
+                                  az deployment group create \
+                                --name $(Build.BuildNumber) \
+                                --resource-group  $(Stage_RG) \
+                                --template-file $(System.ArtifactsDirectory)/drop/main.bicep \
+                                --parameters @$(System.ArtifactsDirectory)/drop/app_services_paramaters_stg.json
+########################################################prod##############################################################
+  - stage: Prod_Preview
+    dependsOn: Stage_Preview
+    jobs:
+    - job: PreviewAzureChanges
+      displayName: Preview Azure changes
+      steps:
+
+        - task: DownloadBuildArtifacts@0
+          displayName: 'Download artifact'
+          inputs:
+            buildType: 'current'
+            downloadType: 'single'
+            artifactName: 'drop'
+            downloadPath: '$(System.ArtifactsDirectory)'
+        - task: AzureCLI@2
+          name: RunWhatIf
+          displayName: Run what-if
+          inputs:
+            azureSubscription: $(Prod_ServiceConnection)
+            scriptType: 'bash'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              az deployment group what-if \
+                --resource-group $(Prod_RG) \
+                --template-file $(System.ArtifactsDirectory)/drop/main.bicep \
+                --parameters @$(System.ArtifactsDirectory)/drop/app_services_paramaters_prd.json
+                
+  - stage: Prod_Deploy
+
+    dependsOn: Prod_Preview
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+
+          - deployment: Deploy_app_service_To_Prod
+            environment: app_service
+            strategy:
+             runOnce:
+                deploy:
+                 steps:
+                  
+                  - task: DownloadBuildArtifacts@0
+                    displayName: 'Download artifact'
+                    inputs:
+                      buildType: 'current'
+                      downloadType: 'single'
+                      artifactName: 'drop'
+                      downloadPath: '$(System.ArtifactsDirectory)'
+
+                  - task: AzureCLI@2
+
+                    displayName: 'deploy appServices to Prod'
+                    inputs:
+                      azureSubscription: $(Prod_ServiceConnection)
+                      scriptType: bash
+                      scriptLocation: inlineScript
+                      inlineScript: |
+                                  # Creating a resource group
+                                      az group create \
+                                    --name $(Prod_RG) \
+                                    --location $(deploymentDefaultLocation)
+                                    
+                                      #Deploying Bicep file 
+                                      az deployment group create \
+                                    --name $(Build.BuildNumber) \
+                                    --resource-group  $(Prod_RG) \
+                                    --template-file  $(System.ArtifactsDirectory)/drop/main.bicep \
+                                    --parameters @$(System.ArtifactsDirectory)/drop/app_services_paramaters_prd.json
